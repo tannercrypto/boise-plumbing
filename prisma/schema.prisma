@@ -1,0 +1,592 @@
+// prisma/schema.prisma
+// Multi-site local SEO lead generation platform
+// Run: npx prisma migrate dev --name upgrade-multi-site
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SITE
+// One record per website/vertical. Phase 1 = one row "Boise Plumbing".
+// ─────────────────────────────────────────────────────────────────────────────
+model Site {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  name        String   @unique   // "Boise Plumbing"
+  slug        String   @unique   // "boise-plumbing"
+  domain      String   @unique   // "boiseplumbing.com"
+  city        String             // "Boise"
+  state       String             // "ID"
+  timezone    String   @default("America/Boise")
+  phoneNumber String             // "(208) 555-0100"
+  sourceLabel String             // "Boise Plumbing SEO" stored on every lead
+  isActive    Boolean  @default(true)
+
+  // Call tracking — Phase 4 (Twilio integration Phase 5+)
+  trackingPhone         String?   // number shown on website (e.g. dynamic swap number)
+  forwardingPhone       String?   // number calls are forwarded to
+  callTrackingProvider  String?   // e.g. "twilio" | "callrail"
+  callTrackingEnabled   Boolean   @default(false)
+
+  leads             Lead[]
+  jobberConnections JobberConnection[]
+  gscProperty       GscProperty?
+  ga4Property       Ga4Property?
+  assetSnapshots    AssetSnapshot[]
+  alerts            Alert[]
+  callLeads         CallLead[]
+  messageLogs       MessageLog[]
+
+  @@index([slug])
+  @@index([domain])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT
+// Deduplicated contact. Matched by phone or email on lead submission.
+// ─────────────────────────────────────────────────────────────────────────────
+model Client {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name         String
+  phone        String
+  email        String
+  address      String?
+
+  // Client reporting (Phase 4)
+  clientSlug   String?  @unique   // URL-safe slug for /reports/[clientSlug]
+  reportToken  String?            // HMAC-signed token for report access (set on creation)
+
+  leads            Lead[]
+  callLeads        CallLead[]
+  clientSettings   ClientSettings?
+  messageTemplates MessageTemplate[]
+  messageLogs      MessageLog[]
+
+  @@index([phone])
+  @@index([email])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEAD
+// One row per form submission. Linked to Site + optionally Client.
+// ─────────────────────────────────────────────────────────────────────────────
+model Lead {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  siteId   String
+  site     Site    @relation(fields: [siteId], references: [id])
+
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id])
+
+  // Contact snapshot at time of submission
+  name    String
+  phone   String
+  email   String
+  address String
+
+  // Service request
+  service String
+  urgency UrgencyLevel
+  notes   String?  @db.Text
+
+  // Attribution
+  sourceLabel    String
+  landingPageUrl String
+  referrer       String?
+  ipAddress      String?
+  userAgent      String?  @db.Text
+
+  // UTMs
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
+
+  // Ad click IDs
+  gclid  String?
+  fbclid String?
+
+  // Status
+  status LeadStatus @default(NEW)
+
+  // Jobber
+  jobberClientId   String?
+  jobberRequestId  String?
+  jobberSyncStatus JobberSyncStatus @default(PENDING)
+  jobberSyncedAt   DateTime?
+  jobberError      String?  @db.Text
+
+  // Routing
+  routeUsed        String?            // RoutingDestination that was applied
+
+  // Revenue tracking (Phase 3)
+  estimatedJobValue  Float?          // set manually or from Jobber
+  confirmedJobValue  Float?          // confirmed after job completion
+  revenueSource      RevenueSource?  // MANUAL | JOBBER
+  commissionAmount   Float?          // platform commission if applicable
+
+  messageLogs   MessageLog[]
+  jobberApiLogs JobberApiLog[]
+
+  @@index([siteId])
+  @@index([clientId])
+  @@index([createdAt])
+  @@index([status])
+  @@index([jobberSyncStatus])
+  @@index([utmSource, utmMedium, utmCampaign])
+  @@index([gclid])
+  @@index([fbclid])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JOBBER CONNECTION
+// Per-site Jobber OAuth tokens. Each site can connect its own Jobber account.
+// ─────────────────────────────────────────────────────────────────────────────
+model JobberConnection {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  siteId String
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  accessToken  String   @db.Text
+  refreshToken String   @db.Text
+  expiresAt    DateTime
+  tokenType    String   @default("Bearer")
+  scope        String?
+  isActive     Boolean  @default(true)
+
+  // Populated after first successful API call
+  jobberAccountId   String?
+  jobberAccountName String?
+
+  @@index([siteId, isActive])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JOBBER API LOG
+// Every outbound Jobber GraphQL call logged for audit + debugging.
+// ─────────────────────────────────────────────────────────────────────────────
+model JobberApiLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+
+  operation    String         // "createClient" | "createRequest"
+  status       JobberApiStatus
+  durationMs   Int?
+  requestBody  String?  @db.Text   // sanitized — no tokens
+  responseBody String?  @db.Text
+  errorMessage String?  @db.Text
+  httpStatus   Int?
+
+  @@index([leadId])
+  @@index([createdAt])
+  @@index([status])
+  @@index([operation])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum UrgencyLevel {
+  EMERGENCY
+  URGENT
+  STANDARD
+  FLEXIBLE
+}
+
+enum LeadStatus {
+  NEW
+  SUBMITTED_TO_JOBBER
+  JOBBER_ERROR
+  CONTACTED
+  BOOKED
+  LOST
+}
+
+enum JobberSyncStatus {
+  PENDING
+  SUCCESS
+  ERROR
+  SKIPPED
+}
+
+enum JobberApiStatus {
+  SUCCESS
+  ERROR
+  SKIPPED
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 3 — ANALYTICS & ASSET PERFORMANCE
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GOOGLE SEARCH CONSOLE
+// ─────────────────────────────────────────────────────────────────────────────
+
+model GscProperty {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  siteId        String   @unique
+  site          Site     @relation(fields: [siteId], references: [id])
+
+  // The GSC property URI, e.g. "sc-domain:boiseplumbing.com" or "https://boiseplumbing.com/"
+  propertyUri   String
+  // OAuth tokens for the Google account that connected this property
+  accessToken   String   @db.Text
+  refreshToken  String   @db.Text
+  expiresAt     DateTime
+  isActive      Boolean  @default(true)
+
+  // First date we have data for (set on first successful pull)
+  dataStartDate DateTime?
+  lastSyncedAt  DateTime?
+
+  dailyMetrics  GscDailyMetric[]
+
+  @@index([siteId])
+}
+
+model GscDailyMetric {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  propertyId String
+  property   GscProperty @relation(fields: [propertyId], references: [id])
+
+  date        DateTime @db.Date   // the day this metric covers (UTC midnight)
+  page        String?             // URL path, e.g. "/drain-cleaning-boise"
+  query       String?             // search query keyword
+
+  clicks      Int
+  impressions Int
+  ctr         Float              // 0.0–1.0
+  // Labelled "GSC Average Position" — NOT exact rank, GSC-reported average
+  gscAvgPosition Float
+
+  @@unique([propertyId, date, page, query])
+  @@index([propertyId, date])
+  @@index([propertyId, query, date])
+  @@index([date])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GOOGLE ANALYTICS 4
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Ga4Property {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  siteId    String   @unique
+  site      Site     @relation(fields: [siteId], references: [id])
+
+  // GA4 numeric property ID, e.g. "123456789"
+  propertyId    String
+  propertyName  String?
+  // OAuth tokens
+  accessToken   String  @db.Text
+  refreshToken  String  @db.Text
+  expiresAt     DateTime
+  isActive      Boolean @default(true)
+
+  lastSyncedAt  DateTime?
+
+  dailyMetrics  Ga4DailyMetric[]
+
+  @@index([siteId])
+}
+
+model Ga4DailyMetric {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  ga4PropertyId String
+  ga4Property   Ga4Property @relation(fields: [ga4PropertyId], references: [id])
+
+  date          DateTime @db.Date
+
+  // Core metrics
+  users         Int
+  newUsers      Int
+  sessions      Int
+  pageViews     Int
+
+  // Conversion events
+  formSubmits   Int   @default(0)   // event: generate_lead
+  callClicks    Int   @default(0)   // event: click_to_call (prepared, may be 0)
+
+  // Traffic source breakdown (stored as JSON array of {source, medium, campaign, sessions})
+  // Format: [{ "source": "google", "medium": "cpc", "campaign": "boise-drain", "sessions": 42 }]
+  trafficSources Json @default("[]")
+
+  @@unique([ga4PropertyId, date])
+  @@index([ga4PropertyId, date])
+  @@index([date])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSET SNAPSHOT
+// Daily computed summary of a site's performance as a digital asset.
+// One row per site per day. Written by the compute-snapshots cron job.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AssetSnapshot {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id])
+
+  date      DateTime @db.Date
+
+  // Lead metrics (trailing 30 days from this snapshot date)
+  leads30d        Int
+  bookedJobs30d   Int
+
+  // Revenue (trailing 30 days)
+  estimatedRevenue30d Float @default(0)
+  confirmedRevenue30d Float @default(0)
+
+  // Search performance (trailing 30 days, from GSC)
+  organicClicks30d   Int   @default(0)
+  impressions30d     Int   @default(0)
+
+  // Calculated fields
+  jobberSyncRate Float @default(0)   // SUCCESS syncs / total leads with syncStatus != SKIPPED
+
+  @@unique([siteId, date])
+  @@index([siteId, date])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERT
+// Written by the alert engine cron. One row per triggered condition per day.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Alert {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id])
+
+  type      AlertType
+  severity  AlertSeverity @default(WARNING)
+  message   String
+  // Snapshot data that triggered the alert
+  metadata  Json      @default("{}")
+  // Whether this has been seen/dismissed in the admin
+  isRead    Boolean   @default(false)
+  resolvedAt DateTime?
+
+  @@index([siteId, createdAt])
+  @@index([isRead])
+  @@index([type])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS (Phase 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum AlertType {
+  CLICKS_DROP
+  LEADS_DROP
+  JOBBER_SYNC_FAILURES
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum RevenueSource {
+  MANUAL
+  JOBBER
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 4 — REVENUE MANAGEMENT, CALL TRACKING, CLIENT REPORTING
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CALL LEAD
+// Prepared for call tracking (Twilio integration Phase 5+).
+// Stores inbound call events linked to a site and optionally a client.
+// ─────────────────────────────────────────────────────────────────────────────
+model CallLead {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  siteId   String
+  site     Site    @relation(fields: [siteId], references: [id])
+
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id])
+
+  // Call details
+  trackingPhone  String    // the number displayed on the website
+  callerNumber   String    // inbound caller's number
+  durationSeconds Int?     // call duration; null if not answered
+  recordingUrl   String?   // optional recording URL
+
+  // Attribution (populated from call tracking webhook)
+  sourcePage   String?
+  utmSource    String?
+  utmMedium    String?
+  utmCampaign  String?
+
+  status CallLeadStatus @default(RECEIVED)
+
+  @@index([siteId])
+  @@index([clientId])
+  @@index([createdAt])
+  @@index([status])
+}
+
+enum CallLeadStatus {
+  RECEIVED     // call came in
+  ANSWERED     // answered by team
+  VOICEMAIL    // went to voicemail
+  MISSED       // missed, no voicemail
+  SPAM         // marked as spam
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 5 — MESSAGING, CLIENT SETTINGS, CALL INGESTION
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT SETTINGS
+// Per-client routing and messaging configuration.
+// One row per Client. Created on demand when settings are first saved.
+// ─────────────────────────────────────────────────────────────────────────────
+model ClientSettings {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clientId String @unique
+  client   Client @relation(fields: [clientId], references: [id])
+
+  // Lead routing
+  defaultRoute            String  @default("jobber_only")  // RoutingDestination value
+  messagingEnabled        Boolean @default(false)
+
+  // Phone numbers that receive SMS notifications when a lead comes in
+  // Stored as JSON array: ["12085551234", "12085555678"]
+  messageRecipientPhones  Json    @default("[]")
+
+  // Optional: override the global default message template
+  defaultMessageTemplateId String?
+  defaultMessageTemplate   MessageTemplate? @relation(fields: [defaultMessageTemplateId], references: [id])
+
+  @@index([clientId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MESSAGE TEMPLATE
+// Reusable SMS templates per client.
+// Body supports mustache-style variables: {{name}}, {{service}}, {{phone}}
+// ─────────────────────────────────────────────────────────────────────────────
+model MessageTemplate {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+
+  name         String
+  templateBody String   @db.Text
+  // Variables available: {{name}} {{phone}} {{service}} {{urgency}} {{address}} {{site}}
+  isActive     Boolean  @default(true)
+
+  clientSettings ClientSettings[]
+  messageLogs    MessageLog[]
+
+  @@index([clientId])
+  @@index([isActive])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MESSAGE LOG
+// One row per queued/sent/failed message attempt.
+// Provider-neutral: deliveryMethod identifies the send path.
+// ─────────────────────────────────────────────────────────────────────────────
+model MessageLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  sentAt    DateTime?
+
+  leadId   String?
+  lead     Lead?   @relation(fields: [leadId], references: [id])
+
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id])
+
+  siteId   String?
+  site     Site?   @relation(fields: [siteId], references: [id])
+
+  templateId String?
+  template   MessageTemplate? @relation(fields: [templateId], references: [id])
+
+  // Who gets the message
+  recipientPhone String
+
+  // What the message says (rendered from template at queue time)
+  messageBody    String   @db.Text
+
+  // How it was / will be sent
+  deliveryMethod MessageDeliveryMethod @default(MAC_LOCAL)
+
+  status       MessageStatus @default(QUEUED)
+  errorMessage String?
+
+  @@index([leadId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([deliveryMethod, status])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS (Phase 5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum MessageDeliveryMethod {
+  MAC_LOCAL      // macOS companion script via AppleScript / Messages.app
+  FUTURE_TWILIO  // placeholder for Phase 6 Twilio integration
+  MANUAL         // admin sent manually — logged for audit trail
+}
+
+enum MessageStatus {
+  QUEUED   // waiting to be picked up by bridge
+  SENT     // bridge confirmed delivery
+  FAILED   // bridge reported failure or timed out
+}

@@ -1,0 +1,50 @@
+{
+  "name": "boise-plumbing",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "bridge:messages": "tsx scripts/mac-message-bridge.ts",
+    "bridge:messages:dry": "tsx scripts/mac-message-bridge.ts --dry-run",
+    "bridge:messages:once": "tsx scripts/mac-message-bridge.ts --once",
+    "test:lead": "tsx scripts/test-lead.ts",
+    "test:integrations": "tsx scripts/test-integrations.ts",
+    "smoke-test": "tsx scripts/smoke-test.ts",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^3.3.4",
+    "@prisma/client": "^5.10.0",
+    "clsx": "^2.1.0",
+    "lucide-react": "^0.330.0",
+    "next": "14.1.0",
+    "react": "^18",
+    "react-dom": "^18",
+    "react-hook-form": "^7.50.0",
+    "tailwind-merge": "^2.2.1",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "autoprefixer": "^10.0.1",
+    "eslint": "^8",
+    "eslint-config-next": "14.1.0",
+    "postcss": "^8",
+    "prisma": "^5.10.0",
+    "tailwindcss": "^3.3.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

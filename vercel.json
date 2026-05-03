@@ -1,0 +1,19 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sync-analytics",
+      "schedule": "0 6 * * *",
+      "comment": "Pull yesterday's GSC + GA4 data for all connected properties (6am UTC daily)"
+    },
+    {
+      "path": "/api/cron/compute-snapshots",
+      "schedule": "0 7 * * *",
+      "comment": "Compute today's asset snapshot for all sites (7am UTC — after analytics sync)"
+    },
+    {
+      "path": "/api/cron/check-alerts",
+      "schedule": "0 8 * * *",
+      "comment": "Check alert thresholds and write Alert rows (8am UTC — after snapshots)"
+    }
+  ]
+}
