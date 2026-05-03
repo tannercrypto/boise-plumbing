@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic';
 // src/app/admin/dashboard/page.tsx
 // Portfolio overview — top-level admin dashboard.
 // Shows all sites, aggregate metrics, alerts, Jobber health.

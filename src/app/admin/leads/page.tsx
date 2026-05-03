@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic';
 // src/app/admin/leads/page.tsx
 // Lead list dashboard — protected by middleware session check.
 

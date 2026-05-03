@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic';
 // src/app/admin/analytics/page.tsx
 // If someone navigates to /admin/analytics, redirect to the first active site.
 
